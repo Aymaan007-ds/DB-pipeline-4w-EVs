@@ -1,0 +1,113 @@
+{
+  "Comment": "Vehicle extraction coordinator workflow with guard rails and fail-closed behavior",
+  "StartAt": "PrimaryAgent",
+  "States": {
+    "PrimaryAgent": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "primary_agent_handler",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.primary",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Next": "GapDetector"
+    },
+    "GapDetector": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "gap_detector_handler",
+        "Payload.$": "$.primary.Payload"
+      },
+      "ResultPath": "$.gap",
+      "Next": "NeedSearch"
+    },
+    "NeedSearch": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.gap.Payload.missing_targets[0]",
+          "IsPresent": true,
+          "Next": "SearchAgent"
+        }
+      ],
+      "Default": "CommitFromPrimary"
+    },
+    "SearchAgent": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "search_agent_handler",
+        "Payload.$": "$.gap.Payload"
+      },
+      "ResultPath": "$.search",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Next": "VerifierAgent"
+    },
+    "VerifierAgent": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "verifier_agent_handler",
+        "Payload.$": "$.search.Payload"
+      },
+      "ResultPath": "$.verifier",
+      "Next": "MergerAgent"
+    },
+    "MergerAgent": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "merger_agent_handler",
+        "Payload": {
+          "primary.$": "$.primary.Payload",
+          "verifier.$": "$.verifier.Payload"
+        }
+      },
+      "ResultPath": "$.merged",
+      "Next": "CommitMerged"
+    },
+    "CommitMerged": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "commit_agent_handler",
+        "Payload.$": "$.merged.Payload"
+      },
+      "ResultPath": "$.committed",
+      "End": true
+    },
+    "CommitFromPrimary": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "commit_agent_handler",
+        "Payload": {
+          "fields.$": "$.primary.Payload.fields",
+          "provenance.$": "$.primary.Payload.provenance",
+          "confidence.$": "$.primary.Payload.confidence",
+          "conflict_flags": {},
+          "unresolved": {}
+        }
+      },
+      "ResultPath": "$.committed",
+      "End": true
+    }
+  },
+  "TimeoutSeconds": 120
+}
